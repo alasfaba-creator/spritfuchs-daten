@@ -15,10 +15,27 @@ KEEP_EXACT = {"shop", "car_wash", "toilets", "compressed_air", "vacuum_cleaner",
               "automated", "cafe", "bistro", "brand", "name"}
 NEAR = "car_wash|cafe|fast_food|restaurant|charging_station|toilets|compressed_air|vacuum_cleaner"
 
-def query(country):
-    return f"""[out:json][timeout:900][maxsize:1073741824];
-area["ISO3166-1"="{country}"][admin_level=2]->.a;
-nwr[amenity=fuel](area.a)->.f;
+# Länder als grobe Rechtecke, aufgeteilt in 1,5° Stücke, damit jede Abfrage schnell bleibt
+REGIONS = {"DE": (47.2, 5.8, 55.1, 15.1), "AT": (46.3, 9.5, 49.1, 17.2), "FR": (41.3, -5.2, 51.1, 9.6)}
+
+def boxes(countries, step=1.5):
+    seen = set()
+    for c in countries:
+        s0, w0, n0, e0 = REGIONS[c]
+        lat = s0
+        while lat < n0:
+            lng = w0
+            while lng < e0:
+                key = (round(math.floor(lat/step)*step, 2), round(math.floor(lng/step)*step, 2))
+                if key not in seen:
+                    seen.add(key); yield (key[0], key[1], key[0]+step, key[1]+step)
+                lng += step
+            lat += step
+
+def query(b):
+    bb = f"{b[0]},{b[1]},{b[2]},{b[3]}"
+    return f"""[out:json][timeout:180];
+nwr[amenity=fuel]({bb})->.f;
 (.f; nwr(around.f:80)[amenity~"^({NEAR})$"];);
 out center tags;"""
 
@@ -29,10 +46,10 @@ def fetch(q):
         for attempt in range(3):
             try:
                 req = urllib.request.Request(url, data=data, headers={"User-Agent": "Spritfuchs-Daten/1.0 (github.com/alasfaba-creator/spritfuchs-daten)"})
-                with urllib.request.urlopen(req, timeout=1000) as r:
+                with urllib.request.urlopen(req, timeout=240) as r:
                     return json.load(r)
             except Exception as e:
-                last = e; print("Fehler", url, e, file=sys.stderr); time.sleep(30 * (attempt + 1))
+                last = e; print("Fehler", url, e, file=sys.stderr); time.sleep(20 * (attempt + 1))
     raise SystemExit(f"Overpass nicht erreichbar: {last}")
 
 def tk(lat, lng):
@@ -43,9 +60,15 @@ def main():
     countries = sys.argv[2:] or ["DE", "AT", "FR"]
     tiles = {}
     total = 0
-    for c in countries:
-        j = fetch(query(c))
+    done = set()
+    bl = list(boxes(countries))
+    for i, b in enumerate(bl):
+        j = fetch(query(b)); time.sleep(1)
+        print(f"Stück {i+1}/{len(bl)}: {len(j.get('elements', []))} Einträge", file=sys.stderr)
         for e in j.get("elements", []):
+            uid = (e.get("type"), e.get("id"))
+            if uid in done: continue
+            done.add(uid)
             lat = e.get("lat") or (e.get("center") or {}).get("lat")
             lng = e.get("lon") or (e.get("center") or {}).get("lon")
             if lat is None: continue
@@ -57,7 +80,6 @@ def main():
                 tile["f"].append([round(lat, 6), round(lng, 6), keep]); total += 1
             else:
                 tile["n"].append([round(lat, 6), round(lng, 6), t.get("amenity")])
-        print(c, "fertig", file=sys.stderr)
     os.makedirs(out, exist_ok=True)
     for old in glob.glob(os.path.join(out, "*.json")): os.remove(old)
     for k, v in tiles.items():
