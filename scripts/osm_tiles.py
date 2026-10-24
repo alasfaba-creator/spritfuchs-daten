@@ -36,7 +36,7 @@ def boxes(countries, step=1.5):
 def query(b):
     bb = f"{b[0]},{b[1]},{b[2]},{b[3]}"
     # ohne "around": schneller und schonender für die Overpass Server
-    return f"""[out:json][timeout:90];
+    return f"""[out:json][timeout:120];
 (nwr[amenity=fuel]({bb}); nwr[amenity~"^({NEAR})$"]({bb}););
 out center tags;"""
 
@@ -46,7 +46,7 @@ def fetch(q):
     for url in SERVERS:
         try:
             req = urllib.request.Request(url, data=data, headers={"User-Agent": "Spritfuchs-Daten/1.0 (github.com/alasfaba-creator/spritfuchs-daten)"})
-            with urllib.request.urlopen(req, timeout=100) as r:
+            with urllib.request.urlopen(req, timeout=130) as r:
                 return json.load(r)
         except Exception as e:
             print("Fehler", url, e, file=sys.stderr, flush=True)
@@ -56,6 +56,38 @@ def fetch(q):
 def tk(lat, lng):
     return f"{math.floor(lat*10)}_{math.floor(lng*10)}"
 
+LIVE = "https://alasfaba-creator.github.io/spritfuchs-daten/v1/osm/"
+
+def previous_tiles(b):
+    """Letzter veröffentlichter Stand für ein Gebiet, falls die neue Abfrage scheitert."""
+    out = {}
+    for a10 in range(int(round(b[0]*10)), int(round(b[2]*10))):
+        for o10 in range(int(round(b[1]*10)), int(round(b[3]*10))):
+            k = f"{a10}_{o10}"
+            try:
+                with urllib.request.urlopen(LIVE + k + ".json", timeout=20) as r:
+                    out[k] = json.load(r)
+            except Exception:
+                pass
+    return out
+
+def fetch_box(b, depth=0):
+    """Abfrage für ein Gebiet; klappt sie nicht, wird das Gebiet geviertelt und erneut versucht."""
+    j = fetch(query(b)); time.sleep(2)
+    if j is not None:
+        return j.get("elements", [])
+    if depth >= 1:
+        return None
+    mlat, mlng = (b[0]+b[2])/2, (b[1]+b[3])/2
+    parts = [(b[0], b[1], mlat, mlng), (b[0], mlng, mlat, b[3]), (mlat, b[1], b[2], mlng), (mlat, mlng, b[2], b[3])]
+    els = []
+    for q in parts:
+        r = fetch_box(q, depth+1)
+        if r is None:
+            return None
+        els += r
+    return els
+
 def main():
     out = os.path.join(sys.argv[1], "v1", "osm")
     tag = "_".join(sys.argv[2:]) or "alle"
@@ -64,16 +96,24 @@ def main():
     total = 0
     done = set()
     bl = list(boxes(countries))
-    started = time.time(); ok = fail = 0
+    started = time.time(); ok = fail = kept = 0
     for i, b in enumerate(bl):
-        if time.time() - started > 38 * 60:
-            print("Zeitbudget erreicht, Rest beim nächsten Lauf", file=sys.stderr); break
-        j = fetch(query(b)); time.sleep(2)
-        if j is None:
-            fail += 1; continue
+        els = None
+        if time.time() - started < 36 * 60:
+            els = fetch_box(b)
+        if els is None:
+            # alten Stand behalten statt das Gebiet leer zu lassen
+            prev = previous_tiles(b)
+            for k, v in prev.items():
+                tiles.setdefault(k, {"f": [], "n": []})
+                tiles[k]["f"] += v.get("f", []); tiles[k]["n"] += v.get("n", [])
+                total += len(v.get("f", []))
+            fail += 1; kept += 1 if prev else 0
+            print(f"Stück {i+1}/{len(bl)}: alter Stand übernommen ({len(prev)} Kacheln)", file=sys.stderr, flush=True)
+            continue
         ok += 1
-        print(f"Stück {i+1}/{len(bl)}: {len(j.get('elements', []))} Einträge", file=sys.stderr, flush=True)
-        for e in j.get("elements", []):
+        print(f"Stück {i+1}/{len(bl)}: {len(els)} Einträge", file=sys.stderr, flush=True)
+        for e in els:
             uid = (e.get("type"), e.get("id"))
             if uid in done: continue
             done.add(uid)
@@ -92,7 +132,7 @@ def main():
     for k, v in tiles.items():
         with open(os.path.join(out, k + ".json"), "w", encoding="utf-8") as fh:
             json.dump(v, fh, ensure_ascii=False, separators=(",", ":"))
-    status = {"tankstellen": total, "kacheln": len(tiles), "stuecke_ok": ok, "stuecke_fehler": fail,
+    status = {"tankstellen": total, "kacheln": len(tiles), "stuecke_ok": ok, "stuecke_fehler": fail, "alter_stand": kept,
               "dauer_min": round((time.time()-started)/60, 1), "stand": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())}
     with open(os.path.join(sys.argv[1], "v1", f"osm_status_{tag}.json"), "w") as fh: json.dump(status, fh)
     print(json.dumps(status))
