@@ -13,7 +13,7 @@ SERVERS = ["https://overpass-api.de/api/interpreter",
 KEEP = ("payment:", "fuel:")
 KEEP_EXACT = {"shop", "car_wash", "toilets", "compressed_air", "vacuum_cleaner", "opening_hours",
               "automated", "cafe", "bistro", "brand", "name"}
-NEAR = "car_wash|cafe|fast_food|restaurant|charging_station|toilets|compressed_air|vacuum_cleaner"
+NEAR = "car_wash|charging_station|compressed_air|vacuum_cleaner"
 
 # Länder als grobe Rechtecke, aufgeteilt in 1,5° Stücke, damit jede Abfrage schnell bleibt
 REGIONS = {"DE": (47.2, 5.8, 55.1, 15.1), "AT": (46.3, 9.5, 49.1, 17.2), "FR": (41.3, -5.2, 51.1, 9.6)}
@@ -34,23 +34,23 @@ def boxes(countries, step=1.5):
 
 def query(b):
     bb = f"{b[0]},{b[1]},{b[2]},{b[3]}"
-    return f"""[out:json][timeout:180];
-nwr[amenity=fuel]({bb})->.f;
-(.f; nwr(around.f:80)[amenity~"^({NEAR})$"];);
+    # ohne "around": schneller und schonender für die Overpass Server
+    return f"""[out:json][timeout:90];
+(nwr[amenity=fuel]({bb}); nwr[amenity~"^({NEAR})$"]({bb}););
 out center tags;"""
 
 def fetch(q):
+    """Ein Versuch je Server, kurze Wartezeit. Fehlschläge werden übersprungen statt endlos zu warten."""
     data = urllib.parse.urlencode({"data": q}).encode()
-    last = None
     for url in SERVERS:
-        for attempt in range(3):
-            try:
-                req = urllib.request.Request(url, data=data, headers={"User-Agent": "Spritfuchs-Daten/1.0 (github.com/alasfaba-creator/spritfuchs-daten)"})
-                with urllib.request.urlopen(req, timeout=240) as r:
-                    return json.load(r)
-            except Exception as e:
-                last = e; print("Fehler", url, e, file=sys.stderr); time.sleep(20 * (attempt + 1))
-    raise SystemExit(f"Overpass nicht erreichbar: {last}")
+        try:
+            req = urllib.request.Request(url, data=data, headers={"User-Agent": "Spritfuchs-Daten/1.0 (github.com/alasfaba-creator/spritfuchs-daten)"})
+            with urllib.request.urlopen(req, timeout=100) as r:
+                return json.load(r)
+        except Exception as e:
+            print("Fehler", url, e, file=sys.stderr, flush=True)
+            time.sleep(5)
+    return None
 
 def tk(lat, lng):
     return f"{math.floor(lat*10)}_{math.floor(lng*10)}"
@@ -62,9 +62,15 @@ def main():
     total = 0
     done = set()
     bl = list(boxes(countries))
+    started = time.time(); ok = fail = 0
     for i, b in enumerate(bl):
-        j = fetch(query(b)); time.sleep(1)
-        print(f"Stück {i+1}/{len(bl)}: {len(j.get('elements', []))} Einträge", file=sys.stderr)
+        if time.time() - started > 35 * 60:
+            print("Zeitbudget erreicht, Rest beim nächsten Lauf", file=sys.stderr); break
+        j = fetch(query(b)); time.sleep(2)
+        if j is None:
+            fail += 1; continue
+        ok += 1
+        print(f"Stück {i+1}/{len(bl)}: {len(j.get('elements', []))} Einträge", file=sys.stderr, flush=True)
         for e in j.get("elements", []):
             uid = (e.get("type"), e.get("id"))
             if uid in done: continue
@@ -85,7 +91,10 @@ def main():
     for k, v in tiles.items():
         with open(os.path.join(out, k + ".json"), "w", encoding="utf-8") as fh:
             json.dump(v, fh, ensure_ascii=False, separators=(",", ":"))
-    print(json.dumps({"tankstellen": total, "kacheln": len(tiles)}))
+    status = {"tankstellen": total, "kacheln": len(tiles), "stuecke_ok": ok, "stuecke_fehler": fail,
+              "dauer_min": round((time.time()-started)/60, 1), "stand": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())}
+    with open(os.path.join(sys.argv[1], "v1", "osm_status.json"), "w") as fh: json.dump(status, fh)
+    print(json.dumps(status))
 
 if __name__ == "__main__":
     main()

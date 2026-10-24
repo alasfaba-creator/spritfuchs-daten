@@ -26,6 +26,8 @@ jobs:
           python-version: "3.12"
 
       - name: Ausstattung und Zahlarten aus OpenStreetMap
+        continue-on-error: true
+        timeout-minutes: 40
         run: |
           mkdir -p site
           cp -r public/. site/ 2>/dev/null || true
