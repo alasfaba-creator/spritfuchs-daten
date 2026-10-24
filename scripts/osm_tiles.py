@@ -16,7 +16,8 @@ KEEP_EXACT = {"shop", "car_wash", "toilets", "compressed_air", "vacuum_cleaner",
 NEAR = "car_wash|charging_station|compressed_air|vacuum_cleaner"
 
 # Länder als grobe Rechtecke, aufgeteilt in 1,5° Stücke, damit jede Abfrage schnell bleibt
-REGIONS = {"DE": (47.2, 5.8, 55.1, 15.1), "AT": (46.3, 9.5, 49.1, 17.2), "FR": (41.3, -5.2, 51.1, 9.6)}
+REGIONS = {"DE": (47.2, 5.8, 55.1, 15.1), "DEN": (51.0, 5.8, 55.1, 15.1), "DES": (47.2, 5.8, 51.0, 15.1), "AT": (46.3, 9.5, 49.1, 17.2),
+           "FRN": (46.2, -5.2, 51.1, 8.3), "FRS": (41.3, -2.0, 46.2, 9.6)}
 
 def boxes(countries, step=1.5):
     seen = set()
@@ -57,14 +58,15 @@ def tk(lat, lng):
 
 def main():
     out = os.path.join(sys.argv[1], "v1", "osm")
-    countries = sys.argv[2:] or ["DE", "AT", "FR"]
+    tag = "_".join(sys.argv[2:]) or "alle"
+    countries = sys.argv[2:] or ["DE", "AT", "FRN", "FRS"]
     tiles = {}
     total = 0
     done = set()
     bl = list(boxes(countries))
     started = time.time(); ok = fail = 0
     for i, b in enumerate(bl):
-        if time.time() - started > 35 * 60:
+        if time.time() - started > 38 * 60:
             print("Zeitbudget erreicht, Rest beim nächsten Lauf", file=sys.stderr); break
         j = fetch(query(b)); time.sleep(2)
         if j is None:
@@ -87,13 +89,12 @@ def main():
             else:
                 tile["n"].append([round(lat, 6), round(lng, 6), t.get("amenity")])
     os.makedirs(out, exist_ok=True)
-    for old in glob.glob(os.path.join(out, "*.json")): os.remove(old)
     for k, v in tiles.items():
         with open(os.path.join(out, k + ".json"), "w", encoding="utf-8") as fh:
             json.dump(v, fh, ensure_ascii=False, separators=(",", ":"))
     status = {"tankstellen": total, "kacheln": len(tiles), "stuecke_ok": ok, "stuecke_fehler": fail,
               "dauer_min": round((time.time()-started)/60, 1), "stand": time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())}
-    with open(os.path.join(sys.argv[1], "v1", "osm_status.json"), "w") as fh: json.dump(status, fh)
+    with open(os.path.join(sys.argv[1], "v1", f"osm_status_{tag}.json"), "w") as fh: json.dump(status, fh)
     print(json.dumps(status))
 
 if __name__ == "__main__":
