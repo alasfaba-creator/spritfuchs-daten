@@ -1,0 +1,67 @@
+name: Preisverlauf aktualisieren
+
+on:
+  schedule:
+    - cron: "17 5 * * *"   # täglich ca. 06:17 / 07:17 Uhr deutscher Zeit
+  workflow_dispatch: {}      # zusätzlich per Knopf startbar
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Tankerkönig Archiv holen (nur die letzten Wochen)
+        env:
+          TK_ARCHIVE_URL: ${{ secrets.TK_ARCHIVE_URL }}
+        run: |
+          if [ -z "$TK_ARCHIVE_URL" ]; then
+            echo "::error::Secret TK_ARCHIVE_URL fehlt. Bitte unter Settings > Secrets and variables > Actions eintragen."
+            exit 1
+          fi
+          git clone --filter=blob:none --no-checkout --depth 1 "$TK_ARCHIVE_URL" archive
+          cd archive
+          git sparse-checkout init --no-cone
+          PATTERNS=""
+          for m in 0 1; do
+            YM=$(date -u -d "$(date -u +%Y-%m-15) -$m month" +%Y/%m)
+            PATTERNS="$PATTERNS /prices/$YM/ /stations/$YM/"
+          done
+          git sparse-checkout set $PATTERNS
+          git checkout
+          ls prices/*/* | tail -3
+
+      - name: Kacheln bauen
+        run: |
+          mkdir -p site
+          cp -r public/. site/ 2>/dev/null || true
+          python scripts/build_tiles.py --archive archive --out site --days 7
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
