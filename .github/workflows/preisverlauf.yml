@@ -17,7 +17,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -25,14 +25,22 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Ausstattung und Zahlarten aus OpenStreetMap
+        run: |
+          mkdir -p site
+          cp -r public/. site/ 2>/dev/null || true
+          python scripts/osm_tiles.py site DE AT FR
+
       - name: Tankerkönig Archiv holen (nur die letzten Wochen)
+        id: archive
         env:
           TK_ARCHIVE_URL: ${{ secrets.TK_ARCHIVE_URL }}
         run: |
           if [ -z "$TK_ARCHIVE_URL" ]; then
-            echo "::error::Secret TK_ARCHIVE_URL fehlt. Bitte unter Settings > Secrets and variables > Actions eintragen."
-            exit 1
+            echo "::warning::Secret TK_ARCHIVE_URL fehlt noch. Preisverlauf wird übersprungen."
+            echo "ok=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          echo "ok=true" >> "$GITHUB_OUTPUT"
           git clone --filter=blob:none --no-checkout --depth 1 "$TK_ARCHIVE_URL" archive
           cd archive
           git sparse-checkout init --no-cone
@@ -45,10 +53,9 @@ jobs:
           git checkout
           ls prices/*/* | tail -3
 
-      - name: Kacheln bauen
+      - name: Preisverlauf Kacheln bauen
+        if: steps.archive.outputs.ok == 'true'
         run: |
-          mkdir -p site
-          cp -r public/. site/ 2>/dev/null || true
           python scripts/build_tiles.py --archive archive --out site --days 7
 
       - uses: actions/configure-pages@v5
