@@ -65,7 +65,7 @@ def previous_tiles(b):
         for o10 in range(int(round(b[1]*10)), int(round(b[3]*10))):
             k = f"{a10}_{o10}"
             try:
-                with urllib.request.urlopen(LIVE + k + ".json", timeout=20) as r:
+                with urllib.request.urlopen(LIVE + k + ".json", timeout=8) as r:
                     out[k] = json.load(r)
             except Exception:
                 pass
@@ -99,7 +99,7 @@ def main():
     started = time.time(); ok = fail = kept = 0
     for i, b in enumerate(bl):
         els = None
-        if time.time() - started < 36 * 60:
+        if time.time() - started < 32 * 60:
             els = fetch_box(b)
         if els is None:
             # alten Stand behalten statt das Gebiet leer zu lassen

@@ -18,7 +18,7 @@ jobs:
   osm:
     name: OSM ${{ matrix.region }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 55
     continue-on-error: true
     strategy:
       fail-fast: false
@@ -93,6 +93,7 @@ jobs:
 
   deploy:
     needs: build
+    if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
